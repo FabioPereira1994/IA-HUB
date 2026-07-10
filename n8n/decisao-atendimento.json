@@ -1,0 +1,148 @@
+{
+  "name": "AI Customer Hub — Decisão de Atendimento",
+  "nodes": [
+    {
+      "id": "ff5d570e-3335-4353-9e37-64d41fdefdf5",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "decisao-atendimento",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "decisao-atendimento",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "6aee4276-1ef5-4e72-a494-89e5bd644f34",
+      "name": "Verificar Segredo",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-segredo",
+              "leftValue": "={{ $json.headers['x-webhook-secret'] }}",
+              "rightValue": "TROQUE_POR_UM_SEGREDO_IGUAL_AO_N8N_WEBHOOK_SECRET_DO_BACKEND",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "728389c5-25a8-4caa-8c14-d79df918d884",
+      "name": "Responder 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, 140],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 401,
+        "responseBody": "={{ { \"erro\": \"segredo inválido\" } }}"
+      }
+    },
+    {
+      "id": "7b82259a-45c9-40b9-9761-04d8b99dfd45",
+      "name": "Montar Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, -140],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const payload = $input.first().json.body;\n\nconst config = payload.configuracaoAgente || {};\nconst nomeAgente = config.nome_agente || 'Assistente';\nconst tom = config.tom || 'profissional';\n\nconst objetivos = [];\nif (config.objetivo_vendas) objetivos.push('vendas');\nif (config.objetivo_atendimento) objetivos.push('atendimento');\nif (config.objetivo_suporte) objetivos.push('suporte');\n\nconst baseConhecimento = (payload.baseConhecimento || [])\n  .map((trecho, i) => `[${i + 1}] ${trecho}`)\n  .join('\\n\\n');\n\nconst nomesAutor = { cliente: 'Cliente', ia: nomeAgente, atendente: 'Atendente', sistema: 'Sistema' };\nconst historico = (payload.historico || [])\n  .map((m) => `${nomesAutor[m.autor] || m.autor}: ${m.texto}`)\n  .join('\\n');\n\nconst promptSistema = `Você é ${nomeAgente}, o assistente de atendimento via WhatsApp de uma empresa. Tom de voz: ${tom}. Seus objetivos: ${objetivos.join(', ') || 'atendimento geral'}.\n\nRegras de transferência para humano: ${config.regras_transferencia || 'transfira quando o cliente pedir explicitamente ou quando você não tiver certeza da resposta.'}\nRegras para abrir chamado: ${config.regras_abertura_chamado || 'abra um chamado quando identificar um problema que precisa de acompanhamento humano (ex.: atraso, erro, reclamação).'}\nLimites de atuação: ${config.limites_atuacao || 'não prometa prazos ou valores que não estejam no contexto abaixo.'}\n\nTrechos relevantes da base de conhecimento da empresa:\n${baseConhecimento || '(nenhum trecho relevante encontrado)'}\n\nHistórico recente da conversa:\n${historico || '(sem histórico)'}\n\nResponda SOMENTE em JSON válido, sem markdown, no formato exato:\n{\"acao\": \"responder\" | \"transferir\" | \"abrir_chamado\", \"resposta\": \"texto a enviar ao cliente pelo WhatsApp (ou null se acao = transferir sem mensagem de handoff)\", \"chamado\": {\"problema\": \"...\", \"descricao\": \"...\", \"prioridade\": \"baixa\" | \"media\" | \"alta\"} ou null}`;\n\nreturn [{\n  json: {\n    empresaId: payload.empresaId,\n    conversaId: payload.conversaId,\n    promptSistema,\n    mensagemAtual: payload.mensagemAtual,\n  },\n}];"
+      }
+    },
+    {
+      "id": "ad0a45df-dbdc-4d5a-94d4-c51ab57ae7d7",
+      "name": "Chamar OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, -140],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"gpt-5-mini\", response_format: { type: \"json_object\" }, messages: [ { role: \"system\", content: $json.promptSistema }, { role: \"user\", content: $json.mensagemAtual } ] }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "c971d3d3-fe36-4b80-8c14-41533f6ebf02",
+      "name": "Interpretar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, -140],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const resposta = $input.first().json;\nconst conteudo = resposta.choices && resposta.choices[0] && resposta.choices[0].message\n  ? resposta.choices[0].message.content\n  : null;\n\nlet decisao;\ntry {\n  decisao = JSON.parse(conteudo);\n} catch (err) {\n  // Se a IA não devolveu um JSON válido, joga pra fila de humanos em vez\n  // de arriscar mandar algo quebrado pro cliente.\n  decisao = { acao: 'transferir', resposta: null, chamado: null };\n}\n\nconst acoesValidas = ['responder', 'transferir', 'abrir_chamado'];\nif (!acoesValidas.includes(decisao.acao)) {\n  decisao.acao = 'transferir';\n}\n\nreturn [{ json: decisao }];"
+      }
+    },
+    {
+      "id": "30832199-6e3d-495a-9a1d-588a0f5afc39",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, -140],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      }
+    },
+    {
+      "id": "918f2652-8c2e-4f56-a587-10cfe092ec83",
+      "name": "Notas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -420],
+      "parameters": {
+        "width": 640,
+        "height": 260,
+        "content": "## AI Customer Hub — Decisão de Atendimento\n\nEsse workflow é chamado SÍNCRONAMENTE pelo backend (services/n8nAgente.service.js) toda vez que chega uma mensagem nova do WhatsApp e a conversa ainda não está com um humano.\n\n**Antes de ativar:**\n1. Em **Verificar Segredo**, troque o valor fixo pelo mesmo texto de `N8N_WEBHOOK_SECRET` no `.env` do backend.\n2. Garanta que a variável de ambiente `OPENAI_API_KEY` esteja disponível pro n8n (ou troque o node **Chamar OpenAI** por uma credencial HTTP Header Auth, mais seguro que referenciar `$env` direto).\n3. Confirme o nome do modelo em **Chamar OpenAI** (`gpt-5-mini`) contra a documentação atual da OpenAI antes de ir pra produção — nomes e preços de modelo mudam com frequência.\n4. Ative o workflow e copie a URL do node **Webhook** pra variável `N8N_WEBHOOK_URL` do backend."
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Verificar Segredo", "type": "main", "index": 0 }]]
+    },
+    "Verificar Segredo": {
+      "main": [
+        [{ "node": "Montar Prompt", "type": "main", "index": 0 }],
+        [{ "node": "Responder 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Montar Prompt": {
+      "main": [[{ "node": "Chamar OpenAI", "type": "main", "index": 0 }]]
+    },
+    "Chamar OpenAI": {
+      "main": [[{ "node": "Interpretar Resposta", "type": "main", "index": 0 }]]
+    },
+    "Interpretar Resposta": {
+      "main": [[{ "node": "Responder", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
