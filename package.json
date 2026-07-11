@@ -5,11 +5,11 @@
   "description": "API do AI Customer Hub — Sprint 1 (auth, empresas, dashboard)",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "db:schema": "psql \"$DATABASE_URL\" -f db/schema.sql",
-    "db:seed": "psql \"$DATABASE_URL\" -f db/seed.sql"
-  },
+  "start": "node src/server.js",
+  "dev": "nodemon src/server.js",
+  "db:schema": "node scripts/db-schema.js",
+  "db:seed": "node scripts/db-seed.js"
+},
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -23,6 +23,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "dotenv-cli": "^11.0.0",
     "nodemon": "^3.1.0"
   },
   "engines": {
