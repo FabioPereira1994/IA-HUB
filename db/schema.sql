@@ -343,39 +343,116 @@ CREATE TRIGGER trg_automacoes_atualizado_em
   BEFORE UPDATE ON automacoes
   FOR EACH ROW EXECUTE FUNCTION set_atualizado_em();
 
-COMMIT;
 
 -- =====================================================================
+-- =====================================================================
 -- MÓDULO 1 — Isolamento de dados entre empresas (Row Level Security)
--- Padrão: a aplicação executa, por transação/sessão,
---   SET app.empresa_id = '<uuid-da-empresa-logada>';
--- e o Postgres passa a filtrar automaticamente as linhas dessa empresa —
--- uma segunda camada de proteção além do WHERE empresa_id = ... nas
--- queries da aplicação.
+-- Padrão: a aplicação executa, por transação (withTenant em
+-- src/config/db.js), SET LOCAL app.empresa_id = '<uuid-da-empresa>';
+-- e o Postgres passa a filtrar automaticamente as linhas dessa empresa.
 --
--- Abaixo, o padrão aplicado às tabelas mais sensíveis (inclui "leads",
--- já usada pelo endpoint de dashboard do Sprint 1). Replique para as
--- demais tabelas com empresa_id (documentos, documento_chunks,
--- automacoes, integracoes_whatsapp, configuracoes_ia, tags) antes de
--- ir para produção.
+-- Cobertura completa: todas as 15 tabelas com empresa_id (direto ou via
+-- tabela pai) têm RLS + FORCE. Só "empresas" fica de fora — é o próprio
+-- tenant, não tem empresa_id pra filtrar contra si mesma.
+--
+-- FORCE ROW LEVEL SECURITY é obrigatório em todas: sem ele, a policy é
+-- ignorada quando a conexão usa o role dono das tabelas (o app conecta
+-- como "postgres" via DATABASE_URL, que é o dono).
 --
 -- Importante: RLS aqui é uma SEGUNDA camada de proteção. A camada de
 -- aplicação (API) sempre filtra por empresa_id explicitamente nas
 -- queries — nunca depender só do RLS.
 -- =====================================================================
 
+-- ---- Tabelas com empresa_id direto ----
+
 ALTER TABLE clientes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clientes FORCE ROW LEVEL SECURITY;
 CREATE POLICY isolamento_clientes ON clientes
   USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
 
 ALTER TABLE conversas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversas FORCE ROW LEVEL SECURITY;
 CREATE POLICY isolamento_conversas ON conversas
   USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
 
 ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tickets FORCE ROW LEVEL SECURITY;
 CREATE POLICY isolamento_tickets ON tickets
   USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
 
 ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE leads FORCE ROW LEVEL SECURITY;
 CREATE POLICY isolamento_leads ON leads
   USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE documentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documentos FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_documentos ON documentos
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE documento_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documento_chunks FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_documento_chunks ON documento_chunks
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE integracoes_whatsapp ENABLE ROW LEVEL SECURITY;
+ALTER TABLE integracoes_whatsapp FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_integracoes_whatsapp ON integracoes_whatsapp
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE configuracoes_ia ENABLE ROW LEVEL SECURITY;
+ALTER TABLE configuracoes_ia FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_configuracoes_ia ON configuracoes_ia
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE usuarios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usuarios FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_usuarios ON usuarios
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tags FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_tags ON tags
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+ALTER TABLE automacoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE automacoes FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_automacoes ON automacoes
+  USING (empresa_id = current_setting('app.empresa_id', true)::uuid);
+
+-- ---- Tabelas sem empresa_id próprio — isolamento via subquery ----
+
+ALTER TABLE mensagens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mensagens FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_mensagens ON mensagens
+  USING (conversa_id IN (
+    SELECT id FROM conversas
+    WHERE empresa_id = current_setting('app.empresa_id', true)::uuid
+  ));
+
+ALTER TABLE notas_internas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notas_internas FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_notas_internas ON notas_internas
+  USING (conversa_id IN (
+    SELECT id FROM conversas
+    WHERE empresa_id = current_setting('app.empresa_id', true)::uuid
+  ));
+
+ALTER TABLE cliente_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliente_tags FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_cliente_tags ON cliente_tags
+  USING (cliente_id IN (
+    SELECT id FROM clientes
+    WHERE empresa_id = current_setting('app.empresa_id', true)::uuid
+  ));
+
+ALTER TABLE cliente_historico ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliente_historico FORCE ROW LEVEL SECURITY;
+CREATE POLICY isolamento_cliente_historico ON cliente_historico
+  USING (cliente_id IN (
+    SELECT id FROM clientes
+    WHERE empresa_id = current_setting('app.empresa_id', true)::uuid
+  ));
+
+COMMIT;
