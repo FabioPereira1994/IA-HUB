@@ -5,6 +5,7 @@ const dashboardRoutes = require('./dashboard.routes');
 const conversasRoutes = require('./conversas.routes');
 const clientesRoutes = require('./clientes.routes');
 const webhooksRoutes = require('./webhooks.routes');
+const documentosRoutes = require('./DocumentoRoutes'); 
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/conversas', conversasRoutes);
 router.use('/clientes', clientesRoutes);
 router.use('/webhooks', webhooksRoutes);
+router.use('/documentos', documentosRoutes);
 
 module.exports = router;

@@ -1,21 +1,17 @@
 const { OpenAI } = require('openai');
 const ParserService = require('./ParserService');
 const ChunkerService = require('./ChunkerService');
-const { withTenant } = require('../config/db'); // Importa o seu helper de RLS
+const { withTenant } = require('../config/db'); 
 
-// Instancia o cliente da OpenAI (requer OPENAI_API_KEY no .env)
 const openai = new OpenAI();
 
 class DocumentoService {
   /**
    * Orquestra o pipeline completo: File -> Texto -> Chunks -> Embeddings -> Banco
-   * 
-   * @param {string} empresaId - ID do tenant para aplicar RLS
-   * @param {object} file - Objeto do arquivo vindo do Multer
-   * @returns {Promise<object>} Resumo do processamento
    */
-  static async processarUploadDocumento(empresaId, file) {
-    const { buffer, mimetype, originalname, size } = file;
+  static async processarUploadDocumento(empresaId, usuarioId, file) {
+    const { buffer, mimetype, tipo_arquivo, originalname, path } = file;
+    // "path" é o caminho físico gerado pelo multer (ex: uploads/169000-arquivo.pdf)
 
     // 1. Extração
     const textoCompleto = await ParserService.extractText(buffer, mimetype);
@@ -30,12 +26,11 @@ class DocumentoService {
     }
 
     // 3. Embeddings (OpenAI)
-    // O text-embedding-3-small gera vetores de 1536 dimensões nativamente
     let embeddingsResponse;
     try {
       embeddingsResponse = await openai.embeddings.create({
         model: 'text-embedding-3-small',
-        input: chunks, // OpenAI aceita array de strings diretamente
+        input: chunks,
       });
     } catch (error) {
       console.error('[DocumentoService] Falha na API da OpenAI:', error.message);
@@ -43,33 +38,31 @@ class DocumentoService {
     }
 
     // 4. Persistência de Dados (Transaction + RLS)
-    // Usamos o withTenant para garantir que todo insert respeite a empresa atual
     let documentoId;
     await withTenant(empresaId, async (client) => {
-      // Inicia a transação para evitar salvar o documento sem os chunks caso algo falhe
       await client.query('BEGIN');
       
       try {
-        // Insere o registro pai (Documento)
-        // Nota: Ajuste os nomes das colunas de acordo com o seu schema exato (migration)
+        // Insere o registro pai - AGORA ALINHADO COM O SCHEMA
+        // Incluído: url_arquivo e enviado_por. Removido: tamanho.
         const docResult = await client.query(
-          `INSERT INTO documentos (nome_arquivo, tipo, tamanho) 
-           VALUES ($1, $2, $3) RETURNING id`,
-          [originalname, mimetype, size]
+          `INSERT INTO documentos (empresa_id, nome_arquivo, tipo_arquivo, url_arquivo, status, enviado_por) 
+           VALUES ($1, $2, $3, $4, 'pronto', $5) RETURNING id`,
+          [empresaId, originalname, tipo_arquivo, path, usuarioId]
         );
         documentoId = docResult.rows[0].id;
 
-        // Insere os chunks com os vetores
-        // O pgvector requer que o array de float venha no formato string '[0.1, 0.2, ...]'
+        // Insere os chunks - AGORA ALINHADO COM O SCHEMA
+        // Incluído: ordem (indice do loop) e empresa_id (desnormalizado conforme seu schema)
         for (let i = 0; i < chunks.length; i++) {
           const conteudo = chunks[i];
           const embeddingArray = embeddingsResponse.data[i].embedding;
           const vetorSql = `[${embeddingArray.join(',')}]`;
 
           await client.query(
-            `INSERT INTO documento_chunks (documento_id, conteudo, embedding) 
-             VALUES ($1, $2, $3::vector)`,
-            [documentoId, conteudo, vetorSql]
+            `INSERT INTO documento_chunks (documento_id, empresa_id, ordem, conteudo, embedding) 
+             VALUES ($1, $2, $3, $4, $5::vector)`,
+            [documentoId, empresaId, i + 1, conteudo, vetorSql]
           );
         }
 
